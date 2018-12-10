@@ -1,0 +1,307 @@
+Jupyter Notebook
+Untitled4
+Last Checkpoint: 3分钟前
+(autosaved)
+Current Kernel Logo
+Python 3 
+File
+Edit
+View
+Insert
+Cell
+Kernel
+Widgets
+Help
+
+
+import numpy as np
+import pandas as pd
+
+pwd
+'C:\\Users\\Administrator'
+
+accoounts=pd.read_csv('data/accounts.csv')
+clients = pd.read_csv('data/clients.csv')
+card = pd.read_csv('data/card.csv')
+order = pd.read_csv('data/order.csv')
+district = pd.read_csv('data/district.csv')
+loans = pd.read_csv('data/loans.csv')
+disp = pd.read_csv('data/disp.csv')
+trans=pd.read_csv('data/trans.csv',low_memory=False)
+此外，若读取的数据量太大可考虑使用chunksize,产生一个迭代器对象，再分批次读取进内存，分批次进行数据整理，再分批次汇总结果输出
+
+
+df_iter=pd.read_csv('data/trans.csv',
+                    chunksize=10000,
+                    low_memory=False) #trans约100万行，这里chunksize 为10000行，估算有100 个chunk
+
+df_iter.get_chunk(5) #取前5行数据
+trans_id	account_id	date	type	operation	amount	balance	k_symbol	bank	account
+0	695247	2378	1993-01-01	贷	信贷资金	$700	$700	NaN	NaN	NaN
+1	171812	576	1993-01-01	贷	信贷资金	$900	$900	NaN	NaN	NaN
+2	207264	704	1993-01-01	贷	信贷资金	$1,000	$1,000	NaN	NaN	NaN
+3	1117247	3818	1993-01-01	贷	信贷资金	$600	$600	NaN	NaN	NaN
+4	579373	1972	1993-01-02	贷	信贷资金	$400	$400	NaN	NaN	NaN
+
+df_iter.get_chunk(5) #取接下来5行数据
+trans_id	account_id	date	type	operation	amount	balance	k_symbol	bank	account
+5	771035	2632	1993-01-02	贷	信贷资金	$1,100	$1,100	NaN	NaN	NaN
+6	452728	1539	1993-01-03	贷	信贷资金	$600	$600	NaN	NaN	NaN
+7	725751	2484	1993-01-03	贷	信贷资金	$1,100	$1,100	NaN	NaN	NaN
+8	497211	1695	1993-01-03	贷	信贷资金	$200	$200	NaN	NaN	NaN
+9	232960	793	1993-01-03	贷	信贷资金	$800	$800	NaN	NaN	NaN
+数据整合思路
+客户基本信息方面：
+除了district表中客户所在地区的信息外，这里依据业务知识生成新的衍生变量：
+
+客户所在地区的平均犯罪率
+平均失业率
+人均GDP
+
+这里需要对clients表、district表、accounts表按照相应的公共字段进行横向连接
+
+客户行为信息方面：生成的衍生变量为：
+客户贷款前2年的平均账户余额，
+客户贷款前2年账户余额的标准差，
+客户账户余额的变异系数，
+客户账户中贷款前2年出入账比率。
+
+这里需要对clients表、accounts表、loans表、trans表，card表等，disp表按照相应的公共字段进行连接，这里只考虑持有主卡(disp的type字段为主卡)的客户，并只提取前两年的客户行为数据。
+
+整合上述信息得到宽表
+1.数据整合
+1.1目标变量生成
+根据loans表中变量status生成违约标识变量Target
+
+loans表中字段status记录了客户的还款状态
+status为B或D的客户为违约客户
+status为A的客户为正常客户
+status其他的情况为待决客户
+典型的case when操作，pandas中需要借助numpy中的select函数实现(效率较高)
+
+
+loans['Target']=np.select(
+    [
+        loans['status'].isin(['B','C']),
+        loans['status'].isin(['A'])
+    ],
+    [
+        1, #违约用户
+        0,#正常用户
+    ],
+    default=-999 #待决客户
+)
+1.3客户基本信息提取
+客户信息这里涉及到loans、clients、disp和district表，需要进行横向连接操作，这里需要筛选账户权限为‘所有者’的客户账户(只取信用卡主卡客户信息):
+
+merge横向连接函数
+on/left_on/right_on:指定公共字段
+how:指定连接方式
+此外，pandas提供了concat函数进行数据纵向连接，而join则提供了进行索引连接的方法:
+
+1.Pandas的横向、纵向连接:http://pandas.pydata.org/pandas-docs/stable/merging.html 2.Pandas的索引、数据切片介绍:http://pandas.pydata.org/pandas-docs/stable/indexing.html
+
+Type Markdown and LaTeX: α2α2
+
+cust_base = loans.merge(disp.query('type=="所有者"'),#筛选所有者信息
+                        on='account_id',
+                        how='left')\
+                 .merge(clients,
+                        how='left',
+                        on='client_id')\
+                 .merge(district,
+                        how='left',
+                        left_on='district_id',
+                        right_on='A1'
+                 )
+计算衍生率变量：客户年龄可以由客户的出生日期与贷款时间的差产生，而客户居住地区的平均失业率、居住地区的平均犯罪率、人均GDP则可以由如下方式进行计算
+衍生变量名	标签	计算方式
+age	客户年龄	贷款时间-出生日期
+GDP_per	居住地平均GDP	GDP／居住地人数
+unemployment_rate	居住地失业率	两年居住地失业率的平均值
+criminal	居住地平均犯罪率	两年犯罪率的平均值
+assign方法用于对一个pd.DateFrame对象添加新列
+
+
+cust_base_1 = cust_base.assign(
+    age = (pd.to_datetime(cust_base.date)-pd.to_datetime(cust_base.birth_date)).dt.days/365,#年龄
+    GDP_per = cust_base.GDP/cust_base.A4,#年人均GDP
+    unemployment_rate=(cust_base.A12+cust_base.A13)/2,#失业率
+    crime_rate=(cust_base.A15+cust_base.a16)/2,#犯罪率年
+)
+drop用于删除指定列，参数axis=1表示按照列删除，inplace=True代表操作不可逆
+
+
+cust_base_1.drop(['birth_date','type','status','date','loan_id','district_id','disp_id','client_id','A1'],1,inplace=True)
+cust_base_1.head()
+account_id	amount	duration	payments	Target	sex	GDP	A4	A10	A11	A12	A13	A14	A15	a16	age	GDP_per	unemployment_rate	crime_rate
+0	1787	96396	12	8033	1	女	16979	94812	81.8	9650	3.38	3.67	100	15.7	14.8	45.986301	0.179081	3.525	15.25
+1	1801	165960	36	4610	0	男	14111	112709	73.5	8369	1.79	2.31	117	12.7	11.6	24.986301	0.125199	2.050	12.15
+2	9188	127080	60	2118	0	男	12888	77917	53.5	8390	2.28	2.89	132	13.3	13.6	57.191781	0.165407	2.585	13.45
+3	1843	105804	36	2939	0	女	31891	177686	74.8	10045	1.42	1.71	135	18.6	17.7	53.323288	0.179480	1.565	18.15
+4	11013	274740	60	4579	0	男	11322	86513	50.5	8288	3.79	4.52	110	9.0	8.4	15.008219	0.130871	4.155	8.70
+1.4客户行为信息提取
+
+trans.head()
+trans_id	account_id	date	type	operation	amount	balance	k_symbol	bank	account
+0	695247	2378	1993-01-01	贷	信贷资金	$700	$700	NaN	NaN	NaN
+1	171812	576	1993-01-01	贷	信贷资金	$900	$900	NaN	NaN	NaN
+2	207264	704	1993-01-01	贷	信贷资金	$1,000	$1,000	NaN	NaN	NaN
+3	1117247	3818	1993-01-01	贷	信贷资金	$600	$600	NaN	NaN	NaN
+4	579373	1972	1993-01-02	贷	信贷资金	$400	$400	NaN	NaN	NaN
+amount和banlance去除美元符号，转化为float类型，date转换为标准日期类型
+
+trans_new=trans.assign(
+    amount=trans.amount.str.replace('[^0-9]','').astype('float64'), #当且仅当列类型为object(字符)时才可使用正则表达式
+    balance=trans.balance.str.replace('[^0-9]','').astype('float64'),
+    date=pd.to_datetime(trans.date)
+)
+
+trans_new.head()
+trans_id	account_id	date	type	operation	amount	balance	k_symbol	bank	account
+0	695247	2378	1993-01-01	贷	信贷资金	700.0	700.0	NaN	NaN	NaN
+1	171812	576	1993-01-01	贷	信贷资金	900.0	900.0	NaN	NaN	NaN
+2	207264	704	1993-01-01	贷	信贷资金	1000.0	1000.0	NaN	NaN	NaN
+3	1117247	3818	1993-01-01	贷	信贷资金	600.0	600.0	NaN	NaN	NaN
+4	579373	1972	1993-01-02	贷	信贷资金	400.0	400.0	NaN	NaN	NaN
+客户行为信息：时间段的选择 这里需要找到每一个客户贷款前两年的数据，所以需要根据trans表中客户的贷款时间date找到每一个客户最近的贷款时间，并以此为依据选择前两年的客户数据。
+这里知识点在于pandas的分组汇总函数groupby和进阶索引Multilindex:
+
+groupby语法:http://pandas.pydata.org/pandas-docs/stable/groupby.html
+Multilindex:http://pandas.pydata.org/pandas-docs/stable/advanced.html
+
+trans_new_1=trans_new.set_index('account_id').join(
+    trans_new.groupby('account_id').date.max().rename('data_latest'),how='left'
+)
+
+trans_new_1.head()
+trans_id	date	type	operation	amount	balance	k_symbol	bank	account	data_latest
+account_id										
+1	1	1995-03-24	贷	信贷资金	1000.0	1000.0	NaN	NaN	NaN	1998-12-31
+1	5	1995-04-13	贷	从他行收款	3679.0	4679.0	NaN	AB	41403269.0	1998-12-31
+1	199	1995-04-23	贷	信贷资金	12600.0	17279.0	NaN	NaN	NaN	1998-12-31
+1	3530438	1995-04-30	贷	NaN	19.0	17298.0	利息所得	NaN	NaN	1998-12-31
+1	6	1995-05-13	贷	从他行收款	3679.0	20977.0	NaN	AB	41403269.0	1998-12-31
+
+trans_new_2=trans_new_1.assign(
+    diff_time=(trans_new_1.data_latest-trans_new_1.date).dt.days
+).query('diff_time<730').reset_index()
+
+trans_new_2.head()
+account_id	trans_id	date	type	operation	amount	balance	k_symbol	bank	account	data_latest	diff_time
+0	1	74	1997-01-05	借	汇款到另一家银行	2452.0	10208.0	房屋贷款	YZ	87144583.0	1998-12-31	725
+1	1	220	1997-01-12	贷	信贷资金	1200.0	11408.0	NaN	NaN	NaN	1998-12-31	718
+2	1	117	1997-01-13	借	现金	630.0	14457.0	NaN	NaN	NaN	1998-12-31	717
+3	1	26	1997-01-13	贷	从他行收款	3679.0	15087.0	NaN	AB	41403269.0	1998-12-31	717
+4	1	119	1997-01-19	借	现金	390.0	14067.0	NaN	NaN	NaN	1998-12-31	711
+计算客户行为信息部分衍生变量
+衍生变量名	标签	计算方式
+mean_balance	两年内用户账户余额均值	余额均值
+mean_balance	两年内用户账户余额标准差	余额标准差
+mean_balance	两年内用户账户余额的变异系数	余额标准差／余额均值
+ratio	两年内的出入账比率	客户借款／客户贷款
+计算 mean_balance 和 std_balance
+
+balance = trans_new_2.groupby('account_id').balance.agg([np.mean,np.std]).rename(columns={'mean':'balance_mean','std':'balance_std'})
+
+balance.head()
+balance_mean	balance_std
+account_id		
+1	14590.833333	2385.906546
+2	42157.733728	9873.843173
+3	26973.529915	10508.728242
+4	21250.707483	4679.261931
+5	25090.023810	4752.452095
+计算变异系数CV
+
+balance_new=balance.assign(
+    CV=balance.balance_std/balance.balance_mean
+)
+balance_new.head()
+balance_mean	balance_std	CV
+account_id			
+1	14590.833333	2385.906546	0.163521
+2	42157.733728	9873.843173	0.234212
+3	26973.529915	10508.728242	0.389594
+4	21250.707483	4679.261931	0.220193
+5	25090.023810	4752.452095	0.189416
+计算出入账比率，首先进行汇总
+
+rate_date= trans_new_2.groupby(['account_id','type']).amount.sum().reset_index()
+rate_date.head()
+account_id	type	amount
+0	1	借	93893.0
+1	1	贷	94690.0
+2	2	借	521829.0
+3	2	贷	588564.0
+4	3	借	121968.0
+拆分成借贷量两列，在计算出入账比率
+
+rate_data_1=pd.pivot_table(data=rate_date,index='account_id',columns='type',values='amount').reset_index()
+rate_data_1.head()
+type	account_id	借	贷
+0	1	93893.0	94690.0
+1	2	521829.0	588564.0
+2	3	121968.0	173062.0
+3	4	126657.0	135428.0
+4	5	69402.0	97489.0
+
+rate = rate_data_1.assign(
+    ratio=rate_data_1['借']/rate_data_1['贷']
+)
+rate.head()
+type	account_id	借	贷	ratio
+0	1	93893.0	94690.0	0.991583
+1	2	521829.0	588564.0	0.886614
+2	3	121968.0	173062.0	0.704765
+3	4	126657.0	135428.0	0.935235
+4	5	69402.0	97489.0	0.711896
+形成客户行为表
+
+cust_behavior=balance_new.join(
+    rate.set_index('account_id')['ratio'],how='left'
+)
+cust_behavior.head()
+balance_mean	balance_std	CV	ratio
+account_id				
+1	14590.833333	2385.906546	0.163521	0.991583
+2	42157.733728	9873.843173	0.234212	0.886614
+3	26973.529915	10508.728242	0.389594	0.704765
+4	21250.707483	4679.261931	0.220193	0.935235
+5	25090.023810	4752.452095	0.189416	0.711896
+1.5合并cust_behavior和cust_base表形成宽表,再加入目标变量
+
+base=cust_base_1.set_index('account_id').join(
+    cust_behavior,how='left'
+).query('Target!=999')
+
+base.head()
+amount	duration	payments	Target	sex	GDP	A4	A10	A11	A12	...	A15	a16	age	GDP_per	unemployment_rate	crime_rate	balance_mean	balance_std	CV	ratio
+account_id																					
+1787	96396	12	8033	1	女	16979	94812	81.8	9650	3.38	...	15.7	14.8	45.986301	0.179081	3.525	15.25	18911.041667	19597.978102	1.036325	0.924589
+1801	165960	36	4610	0	男	14111	112709	73.5	8369	1.79	...	12.7	11.6	24.986301	0.125199	2.050	12.15	52091.967442	33983.647860	0.652378	0.820996
+9188	127080	60	2118	0	男	12888	77917	53.5	8390	2.28	...	13.3	13.6	57.191781	0.165407	2.585	13.45	33531.678049	6237.211749	0.186010	0.869431
+1843	105804	36	2939	0	女	31891	177686	74.8	10045	1.42	...	18.6	17.7	53.323288	0.179480	1.565	18.15	41555.468354	12755.369237	0.306948	0.815593
+11013	274740	60	4579	0	男	11322	86513	50.5	8288	3.79	...	9.0	8.4	15.008219	0.130871	4.155	8.70	61965.864322	19775.670093	0.319138	0.796202
+5 rows × 22 columns
+
+2.基本分析
+客户性别与违约的关系
+
+pd.crosstab(base.sex,base.Target,margins=True)
+Target	-999	0	1	All
+sex				
+女	24	103	221	348
+男	21	100	213	334
+All	45	203	434	682
+一般报表
+
+
+report_data=base.groupby('sex').Target.agg(['count','sum']).rename(columns={'count':'总数','sum':'违约客户数'}).reset_index()
+report_data['坏客户比例']=report_data['违约客户数']/report_data['总数']
+report_data
+sex	总数	违约客户数	坏客户比例
+0	女	348	-23755	-68.261494
+1	男	334	-20766	-62.173653
+
+​
